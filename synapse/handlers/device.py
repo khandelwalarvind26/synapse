@@ -907,12 +907,8 @@ class DeviceListWorkerUpdater:
     def __init__(self, hs: "HomeServer"):
         from synapse.replication.http.devices import (
             ReplicationMultiUserDevicesResyncRestServlet,
-            ReplicationUserDevicesResyncRestServlet,
         )
 
-        self._user_device_resync_client = (
-            ReplicationUserDevicesResyncRestServlet.make_client(hs)
-        )
         self._multi_user_device_resync_client = (
             ReplicationMultiUserDevicesResyncRestServlet.make_client(hs)
         )
@@ -942,29 +938,7 @@ class DeviceListWorkerUpdater:
             ):
                 raise
 
-            # Fall back to single requests
-            result: Dict[str, Optional[JsonDict]] = {}
-            for user_id in user_ids:
-                result[user_id] = await self._user_device_resync_client(user_id=user_id)
-            return result
-
-    async def user_device_resync(
-        self, user_id: str, mark_failed_as_stale: bool = True
-    ) -> Optional[JsonDict]:
-        """Fetches all devices for a user and updates the device cache with them.
-
-        Args:
-            user_id: The user's id whose device_list will be updated.
-            mark_failed_as_stale: Whether to mark the user's device list as stale
-                if the attempt to resync failed.
-        Returns:
-            A dict with device info as under the "devices" in the result of this
-            request:
-            https://matrix.org/docs/spec/server_server/r0.1.2#get-matrix-federation-v1-user-devices-userid
-            None when we weren't able to fetch the device info for some reason,
-            e.g. due to a connection problem.
-        """
-        return (await self.multi_user_device_resync([user_id]))[user_id]
+            return {}
 
 
 class DeviceListUpdater(DeviceListWorkerUpdater):
@@ -1117,7 +1091,7 @@ class DeviceListUpdater(DeviceListWorkerUpdater):
                 )
 
             if resync:
-                await self.user_device_resync(user_id)
+                await self.multi_user_device_resync(user_ids=[user_id])
             else:
                 # Simply update the single device, since we know that is the only
                 # change (because of the single prev_id matching the current cache)
@@ -1184,8 +1158,8 @@ class DeviceListUpdater(DeviceListWorkerUpdater):
             for user_id in need_resync:
                 try:
                     # Try to resync the current user's devices list.
-                    result = await self.user_device_resync(
-                        user_id=user_id,
+                    result = await self.multi_user_device_resync(
+                        user_ids=[user_id],
                         mark_failed_as_stale=False,
                     )
 
@@ -1243,18 +1217,6 @@ class DeviceListUpdater(DeviceListWorkerUpdater):
 
         if mark_failed_as_stale:
             await self.store.mark_remote_users_device_caches_as_stale(failed)
-
-        return result
-
-    async def user_device_resync(
-        self, user_id: str, mark_failed_as_stale: bool = True
-    ) -> Optional[JsonDict]:
-        result, failed = await self._user_device_resync_returning_failed(user_id)
-
-        if failed and mark_failed_as_stale:
-            # Mark the remote user's device list as stale so we know we need to retry
-            # it later.
-            await self.store.mark_remote_users_device_caches_as_stale((user_id,))
 
         return result
 
